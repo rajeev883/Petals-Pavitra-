@@ -21,11 +21,11 @@ def secret(k, default=None):
 
 DB, BOX_EST = "petals_v2.db", 150                      # local fallback file; ₹150/box revenue estimate (PPT)
 OWNER_PIN = str(secret("OWNER_PIN", "pavitra2026"))    # set OWNER_PIN in secrets for the live site!
-DBURL = secret("DATABASE_URL")                         # Supabase/Postgres link -> permanent data
+DBURL = secret("postgresql://postgres.gaqwoevtdaxzbcfgcgvy:%3FSMWjReXq2A6A%2F%2F@aws-0-ap-south-1.pooler.supabase.com:5432/postgres")                         # Supabase/Postgres link -> permanent data
 PG = bool(DBURL)
 PROMOS = {"PAVITRA10": ("pct", 10), "FLOWER50": ("flat", 50)}
 STATUSES = ["Pending", "Shipped", "Delivered"]
-UPI_ID = "petals.pavitra@upi"
+UPI_ID = "6386907137@famS"
 ASSETS = "assets"   # folder with the brand photos (hero.jpg, logo.jpg, ...)
 CONTACT = {"email": "petals.pavitra@gmail.com", "phone": "+91 98765 43210",
            "address": "A-12, Green Valley, Indore (M.P.) · Anpara (U.P.) - 231225"}   # edit freely
