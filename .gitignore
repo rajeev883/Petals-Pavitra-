@@ -1,0 +1,5 @@
+petals*.db
+.streamlit/secrets.toml
+__pycache__/
+*.pyc
+assets/uploads/
