@@ -15,17 +15,33 @@ import pandas as pd
 import streamlit as st
 
 def secret(k, default=None):
-    """Read a value from Streamlit secrets (or an environment variable)."""
-    try: return st.secrets[k]
-    except Exception: return os.environ.get(k, default)
+    """Read a value from Streamlit secrets (any upper/lower case, also inside [sections]) or the environment."""
+    def find(d):
+        for key in list(d.keys()):
+            if str(key).lower() == k.lower(): return d[key]
+        for key in list(d.keys()):
+            if hasattr(d[key], "keys"):
+                r = find(d[key])
+                if r is not None: return r
+        return None
+    try:
+        r = find(st.secrets)
+        if r is not None: return r.strip() if isinstance(r, str) else r
+    except Exception:
+        pass
+    return os.environ.get(k, os.environ.get(k.upper(), default))
+
+def secret_names():
+    try: return sorted(str(x) for x in st.secrets.keys())
+    except Exception: return []
 
 DB, BOX_EST = "petals_v2.db", 150                      # local fallback file; ₹150/box revenue estimate (PPT)
 OWNER_PIN = str(secret("OWNER_PIN", "pavitra2026"))    # set OWNER_PIN in secrets for the live site!
-DBURL = secret("postgresql://postgres.gaqwoevtdaxzbcfgcgvy:%3FSMWjReXq2A6A%2F%2F@aws-0-ap-south-1.pooler.supabase.com:5432/postgres")                         # Supabase/Postgres link -> permanent data
+DBURL = str(secret("postgresql://postgres.gaqwoevtdaxzbcfgcgvy:[YOUR-PASSWORD]@aws-0-ap-south-1.pooler.supabase.com:5432/postgres") or "").strip().strip("\"\'")   # Supabase link: put it in Streamlit SECRETS, never in this file!
 PG = bool(DBURL)
 PROMOS = {"PAVITRA10": ("pct", 10), "FLOWER50": ("flat", 50)}
 STATUSES = ["Pending", "Shipped", "Delivered"]
-UPI_ID = "6386907137@famS"
+UPI_ID = "6386907137@fam"
 ASSETS = "assets"   # folder with the brand photos (hero.jpg, logo.jpg, ...)
 CONTACT = {"email": "petals.pavitra@gmail.com", "phone": "+91 98765 43210",
            "address": "A-12, Green Valley, Indore (M.P.) · Anpara (U.P.) - 231225"}   # edit freely
@@ -161,6 +177,29 @@ def get_setting(k):
 
 def hash_pw(p, email):
     return hashlib.pbkdf2_hmac("sha256", p.encode(), (email.strip().lower() + "petals-pavitra").encode(), 100_000).hex()
+def _redact(msg):
+    from urllib.parse import urlparse, unquote
+    try:
+        pw = urlparse(DBURL).password
+        for x in filter(None, [DBURL, pw, unquote(pw or "")]): msg = msg.replace(x, "***")
+    except Exception:
+        pass
+    return msg
+
+if PG:   # fail loudly instead of silently saving orders in a temporary database
+    try:
+        if not DBURL.startswith(("postgresql://", "postgres://")):
+            raise ValueError("DATABASE_URL must start with postgresql://")
+        _pg()
+    except Exception as e:
+        _pg.clear()
+        st.error("⚠️ The store cannot connect to its database right now, so orders are paused.")
+        st.caption("Owner: open Streamlit → Manage app → Settings → Secrets and check DATABASE_URL. Use the Supabase "
+                   "*Session pooler* link (user looks like postgres.abcd…), with your real password and no [ ] brackets.")
+        if isinstance(e, ValueError): st.code(str(e))
+        else: st.code(_redact((str(e).strip().splitlines() or [type(e).__name__])[0])[:220])
+        st.stop()
+
 init_db()
 link_images()
 
@@ -384,7 +423,8 @@ def page_checkout():
     if "pending_oid" not in S:
         S.pending_oid = "PP-" + uuid.uuid4().hex[:6].upper()
     oid = S.pending_oid
-    method = st.radio("Payment method", ["UPI", "Credit/Debit Card"], horizontal=True)
+    DEMO = str(secret("DEMO_MODE", "")).lower() in ("1", "true", "yes")   # card is only a simulation -> hidden on the live site
+    method = st.radio("Payment method", ["UPI", "Credit/Debit Card"] if DEMO else ["UPI"], horizontal=True)
     if method == "UPI":
         upi, payee = get_setting("upi_id"), get_setting("payee")
         link = f"upi://pay?pa={upi}&pn={quote(payee)}&am={total:.2f}&cu=INR&tn={oid}"
@@ -465,7 +505,9 @@ def page_my_orders():
 def page_dashboard():
     st.title("📊 Owner Dashboard")
     if PG: st.success("✅ Permanent database connected — your orders and products are safe.")
-    else: st.error("⚠️ Temporary database! Orders and products will be LOST when the app restarts. Add DATABASE_URL in secrets (see DEPLOY.md).")
+    else:
+        st.error("⚠️ Temporary database! Orders and products will be LOST when the app restarts. Add DATABASE_URL in secrets (see DEPLOY.md).")
+        st.caption(f"Secrets this app can see: {secret_names() or 'NONE'} — the list must include DATABASE_URL.")
     found = sum(img_b64(n) is not None for n in ALL_IMAGES)
     if found < len(ALL_IMAGES): st.warning(f"Only {found}/{len(ALL_IMAGES)} brand photos found. Upload assets_data.py to GitHub (next to app.py).")
     if OWNER_PIN == "pavitra2026": st.warning("Default owner PIN is in use. Set OWNER_PIN in secrets before going live.")
@@ -476,7 +518,7 @@ def page_dashboard():
             boxes += i["qty"]; by_prod[i["name"]] = by_prod.get(i["name"], 0) + i["qty"] * i["price"]
     c = st.columns(4)
     c[0].metric("Orders", len(df))
-    paid = df[df.pay_status.fillna("").str.startswith("Paid")]
+    paid = df[df.pay_status.fillna("").eq("Paid")]
     c[1].metric("Revenue received", f"₹{paid.total.sum():.0f}")
     c[2].metric("Boxes sold", boxes)
     c[3].metric("PPT estimate (₹150/box)", f"₹{boxes * BOX_EST}")
@@ -484,6 +526,14 @@ def page_dashboard():
     if by_prod:
         st.subheader("Revenue by product")
         st.bar_chart(pd.Series(by_prod))
+
+    st.subheader("🌸 Your products")
+    gal = table("SELECT * FROM products ORDER BY id")
+    gc = st.columns(4)
+    for i, p in gal.iterrows():
+        with gc[i % 4]:
+            show_product(p)
+            st.caption(f"{p['name']} · ₹{p.price:.0f}" + ("" if p.avail else " · out of stock"))
 
 def page_owner_orders():
     st.title("📋 All Orders")
@@ -502,7 +552,16 @@ def page_owner_orders():
         c2.warning(f"UTR given by customer: {o.utr}\nCheck it in your UPI app / bank statement.")
         if c2.button("💰 Mark payment received"):
             run("UPDATE orders SET pay_status='Paid' WHERE id=?", (oid,)); st.rerun()
+    ids = [int(i["id"]) for i in json.loads(o["items"])]
+    allp = table("SELECT * FROM products")
+    for c, pid in zip(st.columns(max(len(ids), 1)), ids):
+        m = allp[allp.id == pid]
+        if not m.empty:
+            with c: show_product(m.iloc[0], 100)
     invoice(o)
+    with st.expander("🗑️ Delete this order (e.g. a test order)"):
+        if st.checkbox(f"Yes, permanently delete order {oid}") and st.button("Delete order"):
+            run("DELETE FROM orders WHERE id=?", (oid,)); st.rerun()
 
 def page_settings():
     st.title("⚙️ Store Settings")
@@ -523,6 +582,11 @@ def page_settings():
 def page_products():
     st.title("🧺 Manage Products")
     prods = table("SELECT * FROM products ORDER BY id")
+    gc = st.columns(4)
+    for i, p in prods.iterrows():
+        with gc[i % 4]:
+            show_product(p)
+            st.caption(f"{p['name']} · ₹{p.price:.0f}" + ("" if p.avail else " · out of stock"))
     with st.expander("➕ Add new product"):
         with st.form("add"):
             n, d = st.text_input("Name"), st.text_area("Description")
