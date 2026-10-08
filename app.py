@@ -21,11 +21,11 @@ def secret(k, default=None):
 
 DB, BOX_EST = "petals_v2.db", 150                      # local fallback file; ₹150/box revenue estimate (PPT)
 OWNER_PIN = str(secret("OWNER_PIN", "pavitra2026"))    # set OWNER_PIN in secrets for the live site!
-DBURL = secret("postgresql://postgres.gaqwoevtdaxzbcfgcgvy:%3FSMWjReXq2A6A%2F%2F@aws-0-ap-south-1.pooler.supabase.com:5432/postgres")                         # Supabase/Postgres link -> permanent data
+DBURL = secret("DATABASE_URL")                         # Supabase/Postgres link -> permanent data
 PG = bool(DBURL)
 PROMOS = {"PAVITRA10": ("pct", 10), "FLOWER50": ("flat", 50)}
 STATUSES = ["Pending", "Shipped", "Delivered"]
-UPI_ID = "6386907137@fam"
+UPI_ID = "petals.pavitra@upi"
 ASSETS = "assets"   # folder with the brand photos (hero.jpg, logo.jpg, ...)
 CONTACT = {"email": "petals.pavitra@gmail.com", "phone": "+91 98765 43210",
            "address": "A-12, Green Valley, Indore (M.P.) · Anpara (U.P.) - 231225"}   # edit freely
@@ -36,9 +36,22 @@ TEAM = [("Product Head", "Manufacturing & Product Development"), ("Creative Head
         ("Finance Head", "Costing & Pricing"), ("Marketing Head", "Social Media & Promotion"),
         ("Strategy & Research Head", "Market Research & PPT")]
 
-def img(name):
-    p = os.path.join(ASSETS, name or "")
-    return p if name and os.path.isfile(p) else None
+HERE = os.path.dirname(os.path.abspath(__file__))
+ALL_IMAGES = ["hero.jpg", "logo.jpg", "shapes.jpg", "hamper_info.jpg", "giftbox.jpg", "cones.jpg", "diya.jpg",
+              "petals.jpg", "dhoop_card.jpg", "label.jpg", "box_pink.jpg", "box_lavender.jpg"]
+try:
+    from assets_data import IMAGES      # {filename: base64} — upload assets_data.py next to app.py
+except Exception:
+    IMAGES = {}
+
+def img_b64(name):
+    """Base64 of a bundled photo: from assets_data.py if present, else from the assets/ folder."""
+    if not name: return None
+    if name in IMAGES: return IMAGES[name]
+    for base in (os.path.join(HERE, ASSETS), ASSETS):
+        p = os.path.join(base, name)
+        if os.path.isfile(p): return _b64(p)
+    return None
 
 @st.cache_data
 def _b64(path):
@@ -46,14 +59,13 @@ def _b64(path):
         return base64.b64encode(f.read()).decode()
 
 def _embed(b64, width=None):
-    w = f"width:{width}px;max-width:100%" if width else "width:100%"
-    st.markdown(f"<img src='data:image/jpeg;base64,{b64}' style='{w};border-radius:10px;margin-bottom:8px'>",
-                unsafe_allow_html=True)
+    raw = base64.b64decode(b64)
+    if width: st.image(raw, width=width)
+    else: st.image(raw)
 
 def show(name, width=None):
-    """Asset photo embedded as base64 (loads through any tunnel/proxy)."""
-    p = img(name)
-    if p: _embed(_b64(p), width)
+    b = img_b64(name)
+    if b: _embed(b, width)
 
 def show_product(p, width=None):
     """Product photo: uploaded photo stored in the database, else the bundled asset."""
@@ -377,10 +389,7 @@ def page_checkout():
         upi, payee = get_setting("upi_id"), get_setting("payee")
         link = f"upi://pay?pa={upi}&pn={quote(payee)}&am={total:.2f}&cu=INR&tn={oid}"
         c1, c2 = st.columns([1, 2])
-        qr = make_qr(link)
-        src = "data:image/png;base64," + base64.b64encode(qr).decode() if isinstance(qr, bytes) else qr
-        c1.markdown(f"<img src='{src}' style='width:230px;max-width:100%;background:#fff;padding:8px;border-radius:8px'>",
-                    unsafe_allow_html=True)
+        c1.image(make_qr(link), width=230)
         c1.caption("Scan with GPay / PhonePe / Paytm")
         c2.markdown(f"**Pay ₹{total:.2f}** to **{payee}**  \nUPI ID: `{upi}`  \nOrder ref: `{oid}`")
         c2.markdown("1️⃣ Scan the QR and pay  \n2️⃣ Copy the **12-digit UTR / transaction ID** from your UPI app  \n"
@@ -457,6 +466,8 @@ def page_dashboard():
     st.title("📊 Owner Dashboard")
     if PG: st.success("✅ Permanent database connected — your orders and products are safe.")
     else: st.error("⚠️ Temporary database! Orders and products will be LOST when the app restarts. Add DATABASE_URL in secrets (see DEPLOY.md).")
+    found = sum(img_b64(n) is not None for n in ALL_IMAGES)
+    if found < len(ALL_IMAGES): st.warning(f"Only {found}/{len(ALL_IMAGES)} brand photos found. Upload assets_data.py to GitHub (next to app.py).")
     if OWNER_PIN == "pavitra2026": st.warning("Default owner PIN is in use. Set OWNER_PIN in secrets before going live.")
     df = table("SELECT * FROM orders")
     boxes, by_prod = 0, {}
